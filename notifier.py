@@ -24,73 +24,70 @@ BOOKING_URL = "https://www.ucpa.com/sport-station/paris-19/badminton"
 # Message formatting
 # ---------------------------------------------------------------------------
 
-def _format_message(
-    date_label: str,
-    time_slot: str,
-    available_courts: int,
-) -> str:
-    """
-    Build a human-friendly Telegram notification message.
 
-    Example output:
-        🏸 Badminton slot available!
-
-        Date: Tuesday 12 May
-        Time: 19:00–20:00
-        Courts available: 2
-
-        Book here:
-        https://www.ucpa.com/sport-station/paris-19/badminton
-    """
-    # Replace the ASCII hyphen with an en-dash for aesthetics
-    time_display = time_slot.replace("-", "–")
-
-    return (
-        f"🏸 Badminton slot available!\n"
-        f"\n"
-        f"📅 Date: {date_label}\n"
-        f"🕐 Time: {time_display}\n"
-        f"🟢 Courts available: {available_courts}\n"
-        f"\n"
-        f"Book here:\n"
-        f"{BOOKING_URL}"
-    )
+# Abbreviated French day names to keep lines short on mobile
+_DAY_ABBR: dict[str, str] = {
+    "Lundi": "Lun", "Mardi": "Mar", "Mercredi": "Mer",
+    "Jeudi": "Jeu", "Vendredi": "Ven", "Samedi": "Sam", "Dimanche": "Dim",
+}
 
 
-def _format_summary_message(
-    slots: list[dict],
-) -> str:
-    """
-    Build a single summary message listing all available slots.
+def _abbr_date_label(date_label: str) -> str:
+    """'Dimanche 15 mars' → 'Dim 15 mars'"""
+    parts = date_label.split(" ", 1)
+    if len(parts) == 2:
+        abbr = _DAY_ABBR.get(parts[0], parts[0])
+        return f"{abbr} {parts[1]}"
+    return date_label
 
-    This avoids sending one message per slot, which could be spammy.
-    """
-    lines = ["🏸 Badminton slots available!\n"]
 
+def _group_by_date(slots: list[dict]) -> dict[str, list[dict]]:
+    """Group slots by date (ISO), preserving insertion order."""
+    groups: dict[str, list[dict]] = {}
     for slot in slots:
-        time_display = slot["time_slot"].replace("-", "–")
-        lines.append(
-            f"📅 {slot['date_label']}  ·  🕐 {time_display}  ·  "
-            f"🟢 {slot['available_courts']} court(s)"
-        )
+        key = slot.get("date", slot["date_label"])
+        groups.setdefault(key, []).append(slot)
+    return groups
 
-    lines.append(f"\nBook here:\n{BOOKING_URL}")
+
+def _render_groups(groups: dict[str, list[dict]]) -> list[str]:
+    """
+    Render grouped slots as lines, e.g.:
+
+        📅 <b>Dim 15 mars</b>
+          🕐 21:00–22:00  ·  🟢 2 courts
+    """
+    lines = []
+    for _, day_slots in groups.items():
+        label = _abbr_date_label(day_slots[0]["date_label"])
+        lines.append(f"📅 <b>{label}</b>")
+        for slot in day_slots:
+            time_display = slot["time_slot"].replace("-", "–")
+            n = slot["available_courts"]
+            court_str = f"{n} court{'s' if n > 1 else ''}"
+            lines.append(f"  🕐 {time_display}  ·  🟢 {court_str}")
+        lines.append("")  # blank line between dates
+    return lines
+
+
+def _format_summary_message(slots: list[dict]) -> str:
+    """Incremental alert: only new slots since last run."""
+    groups = _group_by_date(slots)
+    lines = ["🏸 <b>Nouveaux créneaux !</b>\n"]
+    lines.extend(_render_groups(groups))
+    lines.append(f'<a href="{BOOKING_URL}">🔗 Réserver</a>')
     return "\n".join(lines)
 
 
 def _format_weekly_summary_message(slots: list[dict]) -> str:
-    """Build a weekly recap message listing all currently available slots."""
-    lines = ["📊 Récap hebdo — créneaux dispos !\n"]
-
-    for slot in slots:
-        time_display = slot["time_slot"].replace("-", "–")
-        lines.append(
-            f"📅 {slot['date_label']}  ·  🕐 {time_display}  ·  "
-            f"🟢 {slot['available_courts']} court(s)"
-        )
-
-    lines.append(f"\nRéserver :\n{BOOKING_URL}")
+    """Friday weekly recap: all currently available slots."""
+    groups = _group_by_date(slots)
+    n_total = sum(len(v) for v in groups.values())
+    lines = [f"📊 <b>Récap hebdo — {n_total} créneau{'x' if n_total > 1 else ''} dispo</b>\n"]
+    lines.extend(_render_groups(groups))
+    lines.append(f'<a href="{BOOKING_URL}">🔗 Réserver</a>')
     return "\n".join(lines)
+
 
 
 # ---------------------------------------------------------------------------

@@ -115,6 +115,7 @@ def _format_date_label(slot: Slot) -> str:
 def _to_notification_data(slots: list[Slot]) -> list[dict]:
     return [
         {
+            "date": s.date,
             "date_label": _format_date_label(s),
             "time_slot": s.time_slot,
             "available_courts": s.available_courts,
