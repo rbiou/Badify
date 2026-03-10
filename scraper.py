@@ -7,6 +7,7 @@ and return a structured list of available slots.
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -122,11 +123,12 @@ def _resolve_day_name(day_of_week_mobile: str) -> str:
 # API fetching
 # ---------------------------------------------------------------------------
 
-def fetch_week(monday: datetime) -> list[Slot]:
+def fetch_week(monday: datetime, session: requests.Session | None = None) -> list[Slot]:
     """
     Fetch all badminton slots for the week starting on *monday*.
 
-    Returns a list of Slot objects that have stock > 0.
+    Optionally accepts a *session* for TCP connection reuse across calls.
+    Returns a list of Slot objects.
     """
     params = {
         "reservationPeriod": "1",
@@ -135,11 +137,12 @@ def fetch_week(monday: datetime) -> list[Slot]:
     }
 
     headers = {"User-Agent": USER_AGENT}
+    requester = session or requests
 
     logger.info("Fetching week starting %s …", _format_date_param(monday))
 
     try:
-        response = requests.get(
+        response = requester.get(
             API_URL, params=params, headers=headers, timeout=REQUEST_TIMEOUT
         )
         response.raise_for_status()
@@ -198,15 +201,29 @@ def fetch_all_weeks(weeks: int = 3) -> list[Slot]:
     """
     Fetch slots for *weeks* consecutive weeks starting from the current week.
 
+    Weeks are fetched in parallel using a shared Session for connection reuse.
     Returns a flat list of all Slot objects across all weeks.
     """
     today = datetime.now()
-    all_slots: list[Slot] = []
+    mondays = [_monday_of_week(today, week_offset=i) for i in range(weeks)]
 
-    for offset in range(weeks):
-        monday = _monday_of_week(today, week_offset=offset)
-        week_slots = fetch_week(monday)
-        all_slots.extend(week_slots)
+    results: dict[int, list[Slot]] = {}
+
+    with requests.Session() as session:
+        session.headers.update({"User-Agent": USER_AGENT})
+        with ThreadPoolExecutor(max_workers=weeks) as executor:
+            future_to_offset = {
+                executor.submit(fetch_week, monday, session): i
+                for i, monday in enumerate(mondays)
+            }
+            for future in as_completed(future_to_offset):
+                offset = future_to_offset[future]
+                results[offset] = future.result()
+
+    # Reassemble in chronological order
+    all_slots: list[Slot] = []
+    for i in range(weeks):
+        all_slots.extend(results.get(i, []))
 
     logger.info("Fetched %d total slots across %d weeks", len(all_slots), weeks)
     return all_slots
